@@ -30,6 +30,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["index.ts"],
+  "include": ["src/"],
   "exclude": ["node_modules", "dist"]
 }

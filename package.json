@@ -2,7 +2,7 @@
   "name": "vc-transcriber",
   "version": "0.0.1",
   "description": "A Discord bot that transcribes VC audio and sends it to a text channel.",
-  "module": "index.ts",
+  "module": "dist/index.js",
   "type": "module",
   "author": "daizu-007",
   "license": "Apache-2.0",
@@ -19,7 +19,7 @@
     "typescript": "^5"
   },
   "scripts": {
-    "start": "bun index.ts",
+    "start": "bun src/index.ts",
     "dev": "bun --watch index.ts",
     "build": "bun build index.ts --outdir dist",
     "typecheck": "tsc --noEmit",
