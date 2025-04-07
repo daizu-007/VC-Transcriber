@@ -140,3 +140,6 @@ bun.lock
 
 # config
 config.toml
+
+# temp
+/tmp
