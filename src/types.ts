@@ -5,6 +5,7 @@
 export interface Config {
   general: {
     channels: Map<string, string>;
+    ignore_words: string[];
   };
   discord: {
     token: string;

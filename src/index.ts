@@ -76,14 +76,17 @@ try {
   if (!config.general.channels) {
     throw new Error('Channels not found in config');
   }
+  if (!config.general.ignore_words) {
+    throw new Error('Ignore words not found in config');
+  }
 } catch (error) {
   console.error('Error in config:', error);
   process.exit(1); // エラーが発生した場合はプロセスを終了
 }
-// DiscordのトークンとGroqのトークンを取得
 const DiscordToken = config.discord.token;
 const groqToken = config.groq.token;
 const channels = config.general.channels;
+const ignoreWords = config.general.ignore_words; // 無視する単語のリストを取得
 
 // Groqの初期化
 const groq = new Groq({
@@ -190,6 +193,7 @@ async function handleUserJoin(voiceState: VoiceState) {
         if (!opusDecoder.destroyed) opusDecoder.destroy(); // デコーダーを破棄
         const text = await transcribeAudio(filename); // 音声ファイルを文字起こし
         if (text === '') return; // 文字起こしに失敗した場合は何もしない
+        if (ignoreWords.some((word) => text.includes(word))) return; // 無視する単語が含まれている場合は何もしない
         if (!voiceState.channelId) return; // VCに参加していない場合は何もしない
         const channelId = channels.get(voiceState.channelId); // テキストチャンネルのIDを取得
         if (channelId) {
