@@ -1,7 +1,7 @@
 // src/index.ts
 
 // 必要なモジュールをインポート
-import { Client, Events, GatewayIntentBits, Collection, VoiceState } from 'discord.js';
+import { Client, Events, GatewayIntentBits, Collection, VoiceState, ChannelType, EmbedBuilder } from 'discord.js';
 import {
   joinVoiceChannel,
   EndBehaviorType,
@@ -13,6 +13,7 @@ import toml from 'toml';
 import fs from 'fs';
 import path from 'path';
 import * as Prism from 'prism-media';
+import Groq from 'groq-sdk';
 // 型定義をインポート
 import type { Config } from './types'; // types.tsからインポート
 
@@ -57,11 +58,37 @@ try {
   if (!config) {
     throw new Error('Config file is empty or invalid');
   }
+  if (config.general && Array.isArray(config.general.channels)) {
+    // Mapに変換
+    config.general.channels = new Map<string, string>(config.general.channels);
+  }
 } catch (error) {
   console.error('Error loading config:', error);
   process.exit(1); // エラーが発生した場合はプロセスを終了
 }
-const token = config.general.token;
+try {
+  if (!config.discord.token) {
+    throw new Error('Discord token not found in config');
+  }
+  if (!config.groq.token) {
+    throw new Error('Groq token not found in config');
+  }
+  if (!config.general.channels) {
+    throw new Error('Channels not found in config');
+  }
+} catch (error) {
+  console.error('Error in config:', error);
+  process.exit(1); // エラーが発生した場合はプロセスを終了
+}
+// DiscordのトークンとGroqのトークンを取得
+const DiscordToken = config.discord.token;
+const groqToken = config.groq.token;
+const channels = config.general.channels;
+
+// Groqの初期化
+const groq = new Groq({
+  apiKey: groqToken,
+});
 
 // 参加しているVCのリスト
 const voiceChannels = new Collection<string, VoiceConnection>();
@@ -90,61 +117,109 @@ function createWavFile(buffer: Buffer, sampleRate = 48000, numChannels = 2, bitD
   return Buffer.concat([header, buffer]);
 }
 
+// 音声データを文字起こしする関数
+async function transcribeAudio(filePath: string) {
+  try {
+    const transcription = await groq.audio.transcriptions.create({
+      file: fs.createReadStream(filePath),
+      model: 'whisper-large-v3',
+      prompt: 'A conversation in Japanese about Minecraft Mods',
+      response_format: 'json',
+      language: 'ja',
+    });
+    return transcription.text; // 文字起こし結果を返す
+  } catch (error) {
+    console.error(`Error transcribing audio: ${error}`);
+    return ''; // エラーが発生した場合は空文字を返す
+  }
+}
+
 // ユーザーがVCに参加したときの処理
 async function handleUserJoin(voiceState: VoiceState) {
   if (voiceState.channelId && voiceChannels.has(voiceState.channelId)) {
     return; // すでに参加しているVCには参加しない
   }
   if (!voiceState.channelId) return; // VCに参加していない場合は何もしない
-  const connection = joinVoiceChannel({
-    channelId: voiceState.channelId,
-    guildId: voiceState.guild.id,
-    adapterCreator: voiceState.guild.voiceAdapterCreator,
-    selfDeaf: false,
-    selfMute: true,
-  });
+  let connection: VoiceConnection;
+  try {
+    connection = joinVoiceChannel({
+      channelId: voiceState.channelId,
+      guildId: voiceState.guild.id,
+      adapterCreator: voiceState.guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: true,
+    });
+  } catch (error) {
+    console.error(`Error joining voice channel: ${error}`);
+    return; // VCに参加できなかった場合は何もしない
+  }
   voiceChannels.set(voiceState.channelId, connection); // 参加しているVCのリストに追加
   const receiver = connection.receiver; // VoiceReceiverを取得
 
   // ユーザーが話し始めたときの処理
   receiver.speaking.on('start', (userId) => {
-    const user = voiceState.guild.members.cache.get(userId);
-    const audioStream = receiver.subscribe(userId, {
-      end: {
-        behavior: EndBehaviorType.AfterSilence,
-        duration: 100,
-      },
-    });
-    // 録音ファイルのパスを生成
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-'); // タイムスタンプを生成
-    const filename = path.join(recordingsDir, `${userId}-${timestamp}.wav`);
-    // バッファーを作成
-    const pcmBuffer: Buffer[] = [];
-    // デコーダーを作成
-    const opusDecoder = new Prism.opus.Decoder({
-      channels: 2,
-      rate: 48000,
-      frameSize: 960,
-    });
-    opusDecoder.on('data', (data) => {
-      pcmBuffer.push(data); // PCMデータをバッファーに追加
-    });
-    const pipeline = audioStream.pipe(opusDecoder);
-    audioStream.on('end', () => {
-      const pcmData = Buffer.concat(pcmBuffer); // バッファーを結合
-      const wavData = createWavFile(pcmData); // WAVファイルを作成
-      fs.writeFile(filename, wavData, (error) => {
-        if (error) {
-          console.error(`Error saving WAV file: ${error}`);
-        }
+    try {
+      const user = voiceState.guild.members.cache.get(userId);
+      const audioStream = receiver.subscribe(userId, {
+        end: {
+          behavior: EndBehaviorType.AfterSilence,
+          duration: 100,
+        },
       });
-      if (!opusDecoder.destroyed) opusDecoder.destroy(); // デコーダーを破棄
-    });
-    pipeline.on('error', (error) => {
-      console.error(`Error recording audio: ${error}`);
-      if (!audioStream.destroyed) audioStream.destroy(); // 音声ストリームを破棄
-      if (!opusDecoder.destroyed) opusDecoder.destroy(); // デコーダーを破棄
-    });
+      // 録音ファイルのパスを生成
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-'); // タイムスタンプを生成
+      const uuid = Math.random().toString(36).substring(2, 15); // UUIDを生成
+      const filename = path.join(recordingsDir, `${userId}-${timestamp}-${uuid}.wav`); // ファイル名を生成
+      // バッファーを作成
+      const pcmBuffer: Buffer[] = [];
+      // デコーダーを作成
+      const opusDecoder = new Prism.opus.Decoder({
+        channels: 2,
+        rate: 48000,
+        frameSize: 960,
+      });
+      opusDecoder.on('data', (data) => {
+        pcmBuffer.push(data); // PCMデータをバッファーに追加
+      });
+      const pipeline = audioStream.pipe(opusDecoder);
+      // ユーザーの発話が終了したときの処理
+      audioStream.on('end', async () => {
+        const pcmData = Buffer.concat(pcmBuffer); // バッファーを結合
+        const wavData = createWavFile(pcmData); // WAVファイルを作成
+        await fs.promises.writeFile(filename, wavData); // WAVファイルを保存
+        if (!opusDecoder.destroyed) opusDecoder.destroy(); // デコーダーを破棄
+        const text = await transcribeAudio(filename); // 音声ファイルを文字起こし
+        if (text === '') return; // 文字起こしに失敗した場合は何もしない
+        if (!voiceState.channelId) return; // VCに参加していない場合は何もしない
+        const channelId = channels.get(voiceState.channelId); // テキストチャンネルのIDを取得
+        if (channelId) {
+          const channel = voiceState.guild.channels.cache.get(channelId); // テキストチャンネルを取得
+          if (channel && channel.type === ChannelType.GuildText) {
+            // テキストチャンネルの場合
+            await channel.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setAuthor({
+                    name: user?.user.tag ?? 'Unknown User',
+                    iconURL: user?.displayAvatarURL() ?? 'https://cdn.discordapp.com/embed/avatars/1.png',
+                  })
+                  .setDescription(text), // 文字起こし結果を送信
+              ],
+            });
+          } else {
+            console.error(`Channel not found or not a text channel: ${channelId}`);
+          }
+        }
+        await fs.promises.unlink(filename); // 一時ファイルを削除
+      });
+      pipeline.on('error', (error) => {
+        console.error(`Error recording audio: ${error}`);
+        if (!audioStream.destroyed) audioStream.destroy(); // 音声ストリームを破棄
+        if (!opusDecoder.destroyed) opusDecoder.destroy(); // デコーダーを破棄
+      });
+    } catch (error) {
+      console.error(`Error processing audio stream: ${error}`);
+    }
   }); // ここまでがユーザーが話し始めたときの処理
 
   // 接続が確立されたときの処理
@@ -196,7 +271,7 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 // Botを起動
-client.login(token).catch((error) => {
+client.login(DiscordToken).catch((error) => {
   console.error('Error logging in:', error);
   process.exit(1); // ログインに失敗した場合はプロセスを終了
 });
