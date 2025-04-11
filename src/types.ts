@@ -9,8 +9,13 @@ export interface Config {
   };
   discord: {
     token: string;
+    client_id: string;
+    guild_id: string;
   };
   groq: {
     token: string;
+  };
+  auth: {
+    auth_channel: string;
   };
 }

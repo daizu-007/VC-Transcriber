@@ -25,7 +25,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write .",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "regcmd": "bun ./src/command_register.ts"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

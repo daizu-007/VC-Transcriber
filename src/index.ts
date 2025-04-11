@@ -9,11 +9,11 @@ import {
   entersState,
   VoiceConnection,
 } from '@discordjs/voice';
-import toml from 'toml';
 import fs from 'fs';
 import path from 'path';
 import * as Prism from 'prism-media';
 import Groq from 'groq-sdk';
+import { loadConfig } from './utils/read_config';
 // 型定義をインポート
 import type { Config } from './types'; // types.tsからインポート
 
@@ -47,46 +47,32 @@ if (files.length > 0) {
 }
 
 // configを読み込む
-let config: Config; // Config型を使用して型定義
-const configPath = path.resolve(__dirname, '../config.toml'); // 相対座標を直接使用すると読み込めなかったため
-try {
-  const configFile = fs.readFileSync(configPath, 'utf-8');
-  if (!configFile) {
-    throw new Error('Config file not found');
-  }
-  config = toml.parse(configFile);
-  if (!config) {
-    throw new Error('Config file is empty or invalid');
-  }
-  if (config.general && Array.isArray(config.general.channels)) {
-    // Mapに変換
-    config.general.channels = new Map<string, string>(config.general.channels);
-  }
-} catch (error) {
-  console.error('Error loading config:', error);
-  process.exit(1); // エラーが発生した場合はプロセスを終了
-}
-try {
-  if (!config.discord.token) {
-    throw new Error('Discord token not found in config');
-  }
-  if (!config.groq.token) {
-    throw new Error('Groq token not found in config');
-  }
-  if (!config.general.channels) {
-    throw new Error('Channels not found in config');
-  }
-  if (!config.general.ignore_words) {
-    throw new Error('Ignore words not found in config');
-  }
-} catch (error) {
-  console.error('Error in config:', error);
-  process.exit(1); // エラーが発生した場合はプロセスを終了
-}
+const config: Config = loadConfig(); // Config型を使用して型定義
+// configの値を取得
 const DiscordToken = config.discord.token;
 const groqToken = config.groq.token;
 const channels = config.general.channels;
-const ignoreWords = config.general.ignore_words; // 無視する単語のリストを取得
+const ignoreWords = config.general.ignore_words;
+const auth_channel = config.auth.auth_channel;
+
+// コマンドをインポート
+const commandDir = path.join(__dirname, 'commands'); // コマンドディレクトリのパスを取得
+const commands: Record<string, any> = {}; // コマンドを格納するオブジェクト
+const commandFiles = fs.readdirSync(commandDir).filter((file) => file.endsWith('.ts') || file.endsWith('.js')); // コマンドファイルを取得
+// コマンド名を配列に追加
+for (const file of commandFiles) {
+  const commandModule = await import(path.join(commandDir, file)); // コマンドをインポート
+  if (!commandModule.default) {
+    console.warn(`Command ${file} does not have a default export.`); // デフォルトエクスポートがない場合はエラーを表示
+    continue; // 次のファイルへ
+  }
+  const command = commandModule.default; // デフォルトエクスポートを取得
+  if (!command.data) {
+    console.warn(`Command ${file} does not have a data property.`); // dataプロパティがない場合はエラーを表示
+    continue; // 次のファイルへ
+  }
+  commands[command.data.name] = command; // コマンド名をキーにしてコマンドを格納
+}
 
 // Groqの初期化
 const groq = new Groq({
@@ -217,7 +203,7 @@ async function handleUserJoin(voiceState: VoiceState) {
         await fs.promises.unlink(filename); // 一時ファイルを削除
       });
       pipeline.on('error', (error) => {
-        console.error(`Error recording audio: ${error}`);
+        console.error(`Audio pipeline error for user ${userId}: ${error.message}`);
         if (!audioStream.destroyed) audioStream.destroy(); // 音声ストリームを破棄
         if (!opusDecoder.destroyed) opusDecoder.destroy(); // デコーダーを破棄
       });
@@ -234,6 +220,7 @@ async function handleUserJoin(voiceState: VoiceState) {
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     await entersState(connection, VoiceConnectionStatus.Signalling, 5_000).catch(() => {
       connection.destroy();
+      if (voiceState.channelId) voiceChannels.delete(voiceState.channelId);
     });
   });
   // 接続が破棄されたときの処理
@@ -266,6 +253,20 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     handleUserJoin(newState); // ユーザーがVCに参加したときの処理を呼び出す
   } else if (oldState.channelId !== null && newState.channelId === null) {
     handleUserLeave(oldState); // ユーザーがVCから離れたときの処理を呼び出す
+  }
+});
+
+// コマンドが実行されたときの処理
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName in commands) {
+    const command = commands[interaction.commandName]; // コマンドを取得
+    try {
+      await command.execute(interaction); // コマンドを実行
+    } catch (error) {
+      console.error('Error executing command:', error);
+      await interaction.reply({ content: 'コマンドの実行中にエラーが発生しました。', ephemeral: true });
+    }
   }
 });
 
