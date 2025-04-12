@@ -53,7 +53,7 @@ const DiscordToken = config.discord.token;
 const groqToken = config.groq.token;
 const channels = config.general.channels;
 const ignoreWords = config.general.ignore_words;
-const auth_channel = config.auth.auth_channel;
+const warning_message = config.general.warning_message;
 
 // コマンドをインポート
 const commandDir = path.join(__dirname, 'commands'); // コマンドディレクトリのパスを取得
@@ -262,7 +262,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.commandName in commands) {
     const command = commands[interaction.commandName]; // コマンドを取得
     try {
-      await command.execute(interaction); // コマンドを実行
+      await command.execute(interaction, warning_message); // コマンドを実行
     } catch (error) {
       console.error('Error executing command:', error);
       await interaction.reply({ content: 'コマンドの実行中にエラーが発生しました。', ephemeral: true });

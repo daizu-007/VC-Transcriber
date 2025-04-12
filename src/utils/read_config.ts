@@ -48,6 +48,9 @@ export function loadConfig(): Config {
     if (!config.discord.guild_id) {
       throw new Error('Discord guild ID not found in config');
     }
+    if (!config.general.warning_message) {
+      throw new Error('Warning message not found in config');
+    }
   } catch (error) {
     console.error('Error in config:', error);
     process.exit(1); // エラーが発生した場合はプロセスを終了
