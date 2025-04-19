@@ -140,6 +140,7 @@ bun.lock
 
 # config
 config.toml
+config.toml.test
 
 # temp
 /tmp

@@ -1,7 +1,17 @@
 // src/index.ts
 
 // 必要なモジュールをインポート
-import { Client, Events, GatewayIntentBits, Collection, VoiceState, ChannelType, EmbedBuilder } from 'discord.js';
+import {
+  Client,
+  Events,
+  GatewayIntentBits,
+  Collection,
+  VoiceState,
+  ChannelType,
+  EmbedBuilder,
+  GuildMember,
+  MessageFlags,
+} from 'discord.js';
 import {
   joinVoiceChannel,
   EndBehaviorType,
@@ -11,11 +21,17 @@ import {
 } from '@discordjs/voice';
 import fs from 'fs';
 import path from 'path';
+import { dirname } from 'path';
 import * as Prism from 'prism-media';
 import Groq from 'groq-sdk';
-import { loadConfig } from './utils/read_config';
+import { loadConfig } from './utils/read_config.js';
 // 型定義をインポート
 import type { Config } from './types'; // types.tsからインポート
+import { fileURLToPath, pathToFileURL } from 'url';
+
+// __dirnameを作成
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // クライアントを作成
 const client = new Client({
@@ -28,7 +44,7 @@ const client = new Client({
 });
 
 // 録音ファイルを保存するディレクトリ
-const recordingsDir = path.join(__dirname, '../tmp');
+const recordingsDir = path.join(process.cwd(), './tmp');
 // ディレクトリが存在しない場合は作成
 if (!fs.existsSync(recordingsDir)) {
   try {
@@ -54,24 +70,34 @@ const groqToken = config.groq.token;
 const channels = config.general.channels;
 const ignoreWords = config.general.ignore_words;
 const warning_message = config.general.warning_message;
+const roleId = config.discord.role_id;
+const commands: Record<string, any> = {}; // コマンドを格納するオブジェクト
+const notificationChannel = config.discord.notification_channel;
+const authChannel = config.auth.auth_channel;
+const dm_message = config.general.dm_message; // DMメッセージ
 
 // コマンドをインポート
-const commandDir = path.join(__dirname, 'commands'); // コマンドディレクトリのパスを取得
-const commands: Record<string, any> = {}; // コマンドを格納するオブジェクト
-const commandFiles = fs.readdirSync(commandDir).filter((file) => file.endsWith('.ts') || file.endsWith('.js')); // コマンドファイルを取得
-// コマンド名を配列に追加
-for (const file of commandFiles) {
-  const commandModule = await import(path.join(commandDir, file)); // コマンドをインポート
-  if (!commandModule.default) {
-    console.warn(`Command ${file} does not have a default export.`); // デフォルトエクスポートがない場合はエラーを表示
-    continue; // 次のファイルへ
+async function importCommands() {
+  const commandDir = path.join(__dirname, 'commands'); // コマンドディレクトリのパスを取得
+  const isBun = typeof process !== 'undefined' && process.versions && 'bun' in process.versions;
+  const fileExtension = isBun ? ['.ts', '.js'] : ['.js']; // Bunなら.tsと.js、Nodeなら.jsのみ
+  const commandFiles = fs.readdirSync(commandDir).filter((file) => fileExtension.some((ext) => file.endsWith(ext))); // コマンドファイルを取得
+  // コマンド名を配列に追加
+  for (const file of commandFiles) {
+    const filePath = path.join(commandDir, file); // コマンドファイルのパスを取得
+    const fileURL = pathToFileURL(filePath).href; // ファイルURLを取得
+    const commandModule = await import(fileURL); // コマンドをインポート
+    if (!commandModule.default) {
+      console.warn(`Command ${file} does not have a default export.`); // デフォルトエクスポートがない場合はエラーを表示
+      continue; // 次のファイルへ
+    }
+    const command = commandModule.default; // デフォルトエクスポートを取得
+    if (!command.data) {
+      console.warn(`Command ${file} does not have a data property.`); // dataプロパティがない場合はエラーを表示
+      continue; // 次のファイルへ
+    }
+    commands[command.data.name] = command; // コマンド名をキーにしてコマンドを格納
   }
-  const command = commandModule.default; // デフォルトエクスポートを取得
-  if (!command.data) {
-    console.warn(`Command ${file} does not have a data property.`); // dataプロパティがない場合はエラーを表示
-    continue; // 次のファイルへ
-  }
-  commands[command.data.name] = command; // コマンド名をキーにしてコマンドを格納
 }
 
 // Groqの初期化
@@ -123,8 +149,63 @@ async function transcribeAudio(filePath: string) {
   }
 }
 
+// 録音の警告をDMで送信する関数
+async function sendWarningMessage(member: GuildMember) {
+  try {
+    await member.send(dm_message); // DMで警告メッセージを送信
+  } catch (error) {
+    console.error(`Error sending warning message: ${error}`);
+  }
+}
+
+// 同意ボタンを押したときの処理
+async function handleAgreeButton(interaction: any) {
+  try {
+    const member = interaction.member;
+    // 通知チャンネルにメッセージを送信
+    const channel = interaction.guild.channels.cache.get(notificationChannel);
+    if (channel && channel.type === ChannelType.GuildText) {
+      await channel.send(`${member.user} がVCでの音声の録音及び文字起こしに同意しました。`);
+    } else {
+      console.error(`Channel not found or not a text channel: ${notificationChannel}`);
+    }
+    // ロールを取得
+    const role = interaction.guild.roles.cache.get(roleId);
+    if (!role) {
+      await interaction.reply({
+        content: 'ロールが見つかりませんでした。管理者に連絡してください。',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    // ユーザーにロールを付与
+    if (member instanceof GuildMember) {
+      await member.roles.add(role);
+      await interaction.reply({ content: '認証に成功しました！VCを楽しんでください！', flags: MessageFlags.Ephemeral });
+    } else {
+      await interaction.reply({
+        content: 'ロールの付与に失敗しました。管理者に連絡してください。',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  } catch (error) {
+    console.error(`Error handling agree button: ${error}`);
+    await interaction.reply({
+      content: '同意ボタンの処理中にエラーが発生しました。管理者に連絡してください。',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+}
+
 // ユーザーがVCに参加したときの処理
 async function handleUserJoin(voiceState: VoiceState) {
+  const member = voiceState.member as GuildMember; // VoiceStateからGuildMemberを取得
+  if (member.user.bot) return; // Botの場合は何もしない
+  try {
+    await sendWarningMessage(member); // 録音の警告をDMで送信
+  } catch (error) {
+    console.error(`Error sending warning message: ${error}`);
+  }
   if (voiceState.channelId && voiceChannels.has(voiceState.channelId)) {
     return; // すでに参加しているVCには参加しない
   }
@@ -178,9 +259,10 @@ async function handleUserJoin(voiceState: VoiceState) {
         await fs.promises.writeFile(filename, wavData); // WAVファイルを保存
         if (!opusDecoder.destroyed) opusDecoder.destroy(); // デコーダーを破棄
         const text = await transcribeAudio(filename); // 音声ファイルを文字起こし
-        if (text === '') return; // 文字起こしに失敗した場合は何もしない
-        if (ignoreWords.some((word) => text.includes(word))) return; // 無視する単語が含まれている場合は何もしない
-        if (!voiceState.channelId) return; // VCに参加していない場合は何もしない
+        if (text === '' || ignoreWords.some((word) => text.includes(word)) || !voiceState.channelId) {
+          fs.promises.unlink(filename); // 文字起こし結果が空または無視ワードが含まれている場合はファイルを削除
+          return; // 何もしない
+        }
         const channelId = channels.get(voiceState.channelId); // テキストチャンネルのIDを取得
         if (channelId) {
           const channel = voiceState.guild.channels.cache.get(channelId); // テキストチャンネルを取得
@@ -258,14 +340,19 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
 // コマンドが実行されたときの処理
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName in commands) {
-    const command = commands[interaction.commandName]; // コマンドを取得
-    try {
-      await command.execute(interaction, warning_message); // コマンドを実行
-    } catch (error) {
-      console.error('Error executing command:', error);
-      await interaction.reply({ content: 'コマンドの実行中にエラーが発生しました。', ephemeral: true });
+  if (interaction.isCommand()) {
+    if (interaction.commandName in commands) {
+      const command = commands[interaction.commandName]; // コマンドを取得
+      try {
+        await command.execute(interaction, warning_message, authChannel); // コマンドを実行
+      } catch (error) {
+        console.error('Error executing command:', error);
+        await interaction.reply({ content: 'コマンドの実行中にエラーが発生しました。', ephemeral: true });
+      }
+    }
+  } else if (interaction.isButton()) {
+    if (interaction.customId === 'agree') {
+      await handleAgreeButton(interaction); // 同意ボタンが押されたときの処理を呼び出す
     }
   }
 });
@@ -275,8 +362,13 @@ client.once(Events.ClientReady, (readyClient) => {
   console.log(`${readyClient.user.tag}でログインしました。`);
 });
 
-// Botを起動
-client.login(DiscordToken).catch((error) => {
-  console.error('Error logging in:', error);
-  process.exit(1); // ログインに失敗した場合はプロセスを終了
-});
+async function main() {
+  await importCommands(); // コマンドをインポート
+  // Botを起動
+  client.login(DiscordToken).catch((error) => {
+    console.error('Error logging in:', error);
+    process.exit(1); // ログインに失敗した場合はプロセスを終了
+  });
+}
+
+main(); // メイン関数を実行

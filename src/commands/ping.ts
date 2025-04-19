@@ -1,10 +1,10 @@
 // ping.ts
 
-import { SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 
 export default {
   data: new SlashCommandBuilder().setName('ping').setDescription('Ping!'),
   async execute(interaction: any) {
-    await interaction.reply('Pong!');
+    await interaction.reply({ content: 'Pong!', flags: MessageFlags.Ephemeral });
   },
 };

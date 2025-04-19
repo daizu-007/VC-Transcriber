@@ -8,7 +8,8 @@ import type { Config } from '../types'; // types.tsからインポート
 // configを読み込む関数
 export function loadConfig(): Config {
   let config: Config; // Config型を使用して型定義
-  const configPath = path.resolve(__dirname, '../../config.toml'); // 相対座標を直接使用すると読み込めなかったため
+  // プロジェクトのルートディレクトリからconfig.tomlを読み込む
+  const configPath = path.resolve(process.cwd(), 'config.toml');
   try {
     const configFile = fs.readFileSync(configPath, 'utf-8');
     if (!configFile) {
@@ -50,6 +51,9 @@ export function loadConfig(): Config {
     }
     if (!config.general.warning_message) {
       throw new Error('Warning message not found in config');
+    }
+    if (!config.discord.role_id) {
+      throw new Error('Discord role ID not found in config');
     }
   } catch (error) {
     console.error('Error in config:', error);

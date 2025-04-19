@@ -13,9 +13,9 @@ const DiscordToken = config.discord.token;
 const clientId = config.discord.client_id;
 const guildId = config.discord.guild_id;
 
-// コマンドファイルの読み込み
-const commandDir = path.join(__dirname, 'commands'); // コマンドディレクトリのパスを取得
-const commands = []; // コマンドを格納する配列
+// コマンドのディレクトリパスを取得
+const commandDir = path.join(process.cwd(), 'src/commands'); // コマンドディレクトリのパスを取得
+const commands: any = []; // コマンドを格納する配列
 const commandFiles = fs.readdirSync(commandDir).filter((file) => file.endsWith('.ts') || file.endsWith('.js')); // コマンドファイルを取得
 
 // コマンドを配列に追加
