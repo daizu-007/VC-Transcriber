@@ -144,3 +144,6 @@ config.toml.test
 
 # temp
 /tmp
+
+# discloud zip
+package.zip
